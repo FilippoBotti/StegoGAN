@@ -85,7 +85,7 @@ class UAGGANModel(BaseModel):
                                              init_gain=opt.init_gain,
                                              gpu_ids=opt.gpu_ids)
 
-            self.stego_model = LitUnsupervisedSegmenter.load_from_checkpoint("/content/StegoGAN/cocostuff27_vit_base_5").cuda()
+            self.stego_model = LitUnsupervisedSegmenter.load_from_checkpoint("/home/pc-tesisti/tesi_botti/stegoGAN/StegoGAN/cocostuff27_vit_base_5").cuda()
             
             print(self.stego_model)
         
