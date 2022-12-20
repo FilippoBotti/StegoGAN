@@ -146,7 +146,7 @@ class CycleGANModel(BaseModel):
 
 
         # G(B) -> A
-        self.fake_A = self.netG_img_B(self.real_B)
+        self.fake_A = self.netG_B(self.real_B)
 
         with torch.no_grad():
             self.code_B = self.stego_model(self.real_B)
