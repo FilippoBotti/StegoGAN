@@ -117,18 +117,21 @@ class CycleGANModel(BaseModel):
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
-    def forward(self):
+def forward(self):
+        """Run forward pass; called by both functions <optimize_parameters> and <test>."""
+        # G(A) -> B
         #genero immagine fake nel modo classico
-        self.fake_B = self.netG_A(self.real_A)
+        self.fake_B = self.netG_img_A(self.real_A)
         
         #utilizzo stego per il background subtraction (img_fake*mask + (1-mask)*img_real) ---- (1-mask)=background
-        self.code_A = self.stego_model(self.real_A)
-        self.linear_probs_A = torch.log_softmax(self.stego_model.linear_probe(self.code_A), dim=1)
-        self.single_img_A = self.real_A[0]
-        self.linear_pred_A = dense_crf(self.single_img_A, self.linear_probs_A[0]).argmax(0)
-        self.mask_A = (self.linear_pred_A == 7)*1
-        #ho la maschera, la converto in pytorch e genero quindi l'attenzione
-        self.att_A = torch.tensor(self.mask_A).cuda()
+        with torch.no_grad():
+          self.code_A = self.stego_model(self.real_A)
+          self.linear_probs_A = torch.log_softmax(self.stego_model.linear_probe(self.code_A), dim=1)
+          self.single_img_A = self.real_A[0]
+          self.linear_pred_A = dense_crf(self.single_img_A, self.linear_probs_A[0]).argmax(0)
+          self.mask_A = (self.linear_pred_A == 7)*1
+          #ho la maschera, la converto in pytorch e genero quindi l'attenzione
+          self.att_A = torch.tensor(self.mask_A).cuda()
         #calcolo quindi l'immagine fake con il background subtraction
         self.masked_fake_B = self.fake_B*self.att_A + self.real_A*(1-self.att_A)
         #dato che l'attenzione (la maschera) è una rete pre addestrata, è necessario calcolarla solo
@@ -138,32 +141,59 @@ class CycleGANModel(BaseModel):
         # cycle G(G(A)) -> A
         #self.cycle_att_B = self.netG_att_B(self.masked_fake_B)
         self.cycle_att_B = self.att_A #per quanto spiegato prima
-        self.cycle_fake_A = self.netG_B(self.masked_fake_B)
+        self.cycle_fake_A = self.netG_img_B(self.masked_fake_B)
         self.cycle_masked_fake_A = self.cycle_fake_A*self.cycle_att_B + self.masked_fake_B*(1-self.cycle_att_B)
 
 
         # G(B) -> A
-        self.fake_A = self.netG_B(self.real_B)
+        self.fake_A = self.netG_img_B(self.real_B)
 
-        self.code_B = self.stego_model(self.real_B)
-        self.linear_probs_B = torch.log_softmax(self.stego_model.linear_probe(self.code_B), dim=1)
-        self.single_img_B = self.real_B[0]
-        self.linear_pred_B = dense_crf(self.single_img_B, self.linear_probs_B[0]).argmax(0)
-        self.mask_B = (self.linear_pred_B == 7)*1
-        #ho la maschera, la converto in pytorch e genero quindi l'attenzione
-        self.att_B = torch.tensor(self.mask_B).cuda()
+        with torch.no_grad():
+          self.code_B = self.stego_model(self.real_B)
+          self.linear_probs_B = torch.log_softmax(self.stego_model.linear_probe(self.code_B), dim=1)
+          self.single_img_B = self.real_B[0]
+          self.linear_pred_B = dense_crf(self.single_img_B, self.linear_probs_B[0]).argmax(0)
+          self.mask_B = (self.linear_pred_B == 7)*1
+          #ho la maschera, la converto in pytorch e genero quindi l'attenzione
+          self.att_B = torch.tensor(self.mask_B).cuda()
 
         self.masked_fake_A = self.fake_A*self.att_B + self.real_B*(1-self.att_B)
 
         # cycle G(G(B)) -> B
         #self.cycle_att_A = self.netG_att_A(self.masked_fake_A)
         self.cycle_att_A = self.att_B
-        self.cycle_fake_B = self.netG_A(self.masked_fake_A)
+        self.cycle_fake_B = self.netG_img_A(self.masked_fake_A)
         self.cycle_masked_fake_B = self.cycle_fake_B*self.cycle_att_A + self.masked_fake_A*(1-self.cycle_att_A)
 
         # just for visualization
         self.att_A_viz, self.att_B_viz = (torch.reshape(self.att_A,(1,1,256,256))-0.5)/0.5, (torch.reshape(self.att_B,(1,1,256,256))-0.5)/0.5
 
+
+        # Solo per visualizzare durante debugging iniziale
+        # with torch.no_grad():
+        #     fig, ax = plt.subplots(1,4, figsize=(5*3,5))
+        #     ax[0].imshow(unnorm(self.real_A).squeeze().permute(1,2,0).cpu().numpy())
+        #     ax[0].set_title("original")
+        #     ax[1].imshow(self.att_A.cpu().numpy())
+        #     ax[1].set_title("mask")
+        #     ax[2].imshow(unnorm(self.masked_fake_B)[0].permute(1,2,0).cpu())
+        #     ax[2].set_title("masked")
+        #     ax[3].imshow(unnorm(self.cycle_masked_fake_A)[0].permute(1,2,0).cpu())
+        #     ax[3].set_title("cycle masked")
+        #     remove_axes(ax)
+        #     fig.savefig('A-B.png')
+        # with torch.no_grad():
+        #     fig, ax = plt.subplots(1,4, figsize=(5*3,5))
+        #     ax[0].imshow(unnorm(self.real_B).squeeze().permute(1,2,0).cpu().numpy())
+        #     ax[0].set_title("original")
+        #     ax[1].imshow(self.att_B.cpu().numpy())
+        #     ax[1].set_title("mask")
+        #     ax[2].imshow(unnorm(self.masked_fake_A)[0].permute(1,2,0).cpu())
+        #     ax[2].set_title("masked")
+        #     ax[3].imshow(unnorm(self.cycle_masked_fake_B)[0].permute(1,2,0).cpu())
+        #     ax[3].set_title("cycle masked")
+        #     remove_axes(ax)
+        #     fig.savefig('B-A.png')
 
     def backward_D_basic(self, netD, real, fake):
         """Calculate GAN loss for the discriminator
