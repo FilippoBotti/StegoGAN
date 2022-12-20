@@ -85,7 +85,7 @@ class UAGGANModel(BaseModel):
                                              init_gain=opt.init_gain,
                                              gpu_ids=opt.gpu_ids)
 
-            self.stego_model = LitUnsupervisedSegmenter.load_from_checkpoint("/home/pc-tesisti/tesi_botti/stegoGAN/StegoGAN/cocostuff27_vit_base_5").cuda()
+            self.stego_model = LitUnsupervisedSegmenter.load_from_checkpoint(opt.stego).cuda()
             
             print(self.stego_model)
         
@@ -178,7 +178,7 @@ class UAGGANModel(BaseModel):
         self.cycle_masked_fake_B = self.cycle_fake_B*self.cycle_att_A + self.masked_fake_A*(1-self.cycle_att_A)
 
         # just for visualization
-        self.att_A_viz, self.att_B_viz = (self.att_A-0.5)/0.5, (self.att_B-0.5)/0.5
+        self.att_A_viz, self.att_B_viz = (torch.reshape(self.att_A,(1,1,256,256))-0.5)/0.5, (torch.reshape(self.att_B,(1,1,256,256))-0.5)/0.5
 
 
         # Solo per visualizzare durante debugging iniziale
