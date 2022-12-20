@@ -3,6 +3,9 @@ import itertools
 from util.image_pool import ImagePool
 from .base_model import BaseModel
 from . import networks
+from STEGO.src.train_segmentation import LitUnsupervisedSegmenter
+from STEGO.src.crf import dense_crf
+from STEGO.src.utils import unnorm, remove_axes
 
 
 class CycleGANModel(BaseModel):
@@ -56,9 +59,9 @@ class CycleGANModel(BaseModel):
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
         visual_names_A = ['real_A', 'fake_B', 'rec_A']
         visual_names_B = ['real_B', 'fake_A', 'rec_B']
-        if self.isTrain and self.opt.lambda_identity > 0.0:  # if identity loss is used, we also visualize G_B(A) ad G_A(B)
-            visual_names_A.append('idt_A')
-            visual_names_B.append('idt_B')
+        if self.isTrain and self.opt.lambda_identity > 0.0:  # if identity loss is used, we also visualize idt_B=G_A(B) ad idt_A=G_A(B)
+            visual_names_A.append('idt_B')
+            visual_names_B.append('idt_A')
 
         self.visual_names = visual_names_A + visual_names_B  # combine visualizations for A and B
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>.
@@ -70,18 +73,20 @@ class CycleGANModel(BaseModel):
         # define networks (both Generators and discriminators)
         # The naming is different from those used in the paper.
         # Code (vs. paper): G_A (G), G_B (F), D_A (D_Y), D_B (D_X)
-        self.netG_A = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, 3, opt.norm,
+        self.netG_A = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf, opt.netG, opt.norm,
                                         not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
-        self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, 3, opt.norm,
+        self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf, opt.netG, opt.norm,
                                         not opt.no_dropout, opt.init_type, opt.init_gain, self.gpu_ids)
+        
+        self.stego_model = LitUnsupervisedSegmenter.load_from_checkpoint(opt.stego).cuda()
+        print("Stego:")
+        print(self.stego_model)
 
         if self.isTrain:  # define discriminators
             self.netD_A = networks.define_D(opt.output_nc, opt.ndf, opt.netD,
-                                            opt.n_layers_D, opt.norm, opt.init_type, 
-                                            opt.init_gain, self.gpu_ids)
+                                            opt.n_layers_D, opt.norm, opt.init_type, opt.init_gain, self.gpu_ids)
             self.netD_B = networks.define_D(opt.input_nc, opt.ndf, opt.netD,
-                                            opt.n_layers_D, opt.norm, opt.init_type, 
-                                            opt.init_gain, self.gpu_ids)
+                                            opt.n_layers_D, opt.norm, opt.init_type, opt.init_gain, self.gpu_ids)
 
         if self.isTrain:
             if opt.lambda_identity > 0.0:  # only works when input and output images have the same number of channels
@@ -97,6 +102,7 @@ class CycleGANModel(BaseModel):
             self.optimizer_D = torch.optim.Adam(itertools.chain(self.netD_A.parameters(), self.netD_B.parameters()), lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer_G)
             self.optimizers.append(self.optimizer_D)
+        
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -112,11 +118,52 @@ class CycleGANModel(BaseModel):
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
-        """Run forward pass; called by both functions <optimize_parameters> and <test>."""
-        self.fake_B = self.netG_A(self.real_A)  # G_A(A)
-        self.rec_A = self.netG_B(self.fake_B)   # G_B(G_A(A))
-        self.fake_A = self.netG_B(self.real_B)  # G_B(B)
-        self.rec_B = self.netG_A(self.fake_A)   # G_A(G_B(B))
+        #genero immagine fake nel modo classico
+        self.fake_B = self.netG_A(self.real_A)
+        
+        #utilizzo stego per il background subtraction (img_fake*mask + (1-mask)*img_real) ---- (1-mask)=background
+        self.code_A = self.stego_model(self.real_A)
+        self.linear_probs_A = torch.log_softmax(self.stego_model.linear_probe(self.code_A), dim=1)
+        self.single_img_A = self.real_A[0]
+        self.linear_pred_A = dense_crf(self.single_img_A, self.linear_probs_A[0]).argmax(0)
+        self.mask_A = (self.linear_pred_A == 7)*1
+        #ho la maschera, la converto in pytorch e genero quindi l'attenzione
+        self.att_A = torch.tensor(self.mask_A).cuda()
+        #calcolo quindi l'immagine fake con il background subtraction
+        self.masked_fake_B = self.fake_B*self.att_A + self.real_A*(1-self.att_A)
+        #dato che l'attenzione (la maschera) è una rete pre addestrata, è necessario calcolarla solo
+        #una volta, nel ciclo di ricostruzione dell'immagine iniziale sarà infatti la stessa maschera
+        #che verrà applicata (prima la ricalcolavo perchè avevo due reti)
+        
+        # cycle G(G(A)) -> A
+        #self.cycle_att_B = self.netG_att_B(self.masked_fake_B)
+        self.cycle_att_B = self.att_A #per quanto spiegato prima
+        self.cycle_fake_A = self.netG_B(self.masked_fake_B)
+        self.cycle_masked_fake_A = self.cycle_fake_A*self.cycle_att_B + self.masked_fake_B*(1-self.cycle_att_B)
+
+
+        # G(B) -> A
+        self.fake_A = self.netG_B(self.real_B)
+
+        self.code_B = self.stego_model(self.real_B)
+        self.linear_probs_B = torch.log_softmax(self.stego_model.linear_probe(self.code_B), dim=1)
+        self.single_img_B = self.real_B[0]
+        self.linear_pred_B = dense_crf(self.single_img_B, self.linear_probs_B[0]).argmax(0)
+        self.mask_B = (self.linear_pred_B == 7)*1
+        #ho la maschera, la converto in pytorch e genero quindi l'attenzione
+        self.att_B = torch.tensor(self.mask_B).cuda()
+
+        self.masked_fake_A = self.fake_A*self.att_B + self.real_B*(1-self.att_B)
+
+        # cycle G(G(B)) -> B
+        #self.cycle_att_A = self.netG_att_A(self.masked_fake_A)
+        self.cycle_att_A = self.att_B
+        self.cycle_fake_B = self.netG_A(self.masked_fake_A)
+        self.cycle_masked_fake_B = self.cycle_fake_B*self.cycle_att_A + self.masked_fake_A*(1-self.cycle_att_A)
+
+        # just for visualization
+        self.att_A_viz, self.att_B_viz = (torch.reshape(self.att_A,(1,1,256,256))-0.5)/0.5, (torch.reshape(self.att_B,(1,1,256,256))-0.5)/0.5
+
 
     def backward_D_basic(self, netD, real, fake):
         """Calculate GAN loss for the discriminator
@@ -152,31 +199,25 @@ class CycleGANModel(BaseModel):
 
     def backward_G(self):
         """Calculate the loss for generators G_A and G_B"""
-        lambda_idt = self.opt.lambda_identity
         lambda_A = self.opt.lambda_A
         lambda_B = self.opt.lambda_B
-        # Identity loss
-        if lambda_idt > 0:
-            # G_A should be identity if real_B is fed: ||G_A(B) - B||
-            self.idt_A = self.netG_A(self.real_B)
-            self.loss_idt_A = self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_idt
-            # G_B should be identity if real_A is fed: ||G_B(A) - A||
-            self.idt_B = self.netG_B(self.real_A)
-            self.loss_idt_B = self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_idt
-        else:
-            self.loss_idt_A = 0
-            self.loss_idt_B = 0
 
-        # GAN loss D_A(G_A(A))
-        self.loss_G_A = self.criterionGAN(self.netD_A(self.fake_B), True)
-        # GAN loss D_B(G_B(B))
-        self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A), True)
+        # GAN loss D_A(G(A))
+        masked_fake_B = self.masked_fake_B
+        if self.opt.use_mask_for_D:
+            masked_fake_B *= self.att_A
+        self.loss_G_A = self.criterionGAN(self.netD_A(self.masked_fake_B), True)
+        # GAN loss D_B(G(B))
+        masked_fake_A = self.masked_fake_A
+        if self.opt.use_mask_for_D:
+            masked_fake_A *= self.att_B
+        self.loss_G_B = self.criterionGAN(self.netD_B(self.masked_fake_A), True)
         # Forward cycle loss || G_B(G_A(A)) - A||
-        self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
+        self.loss_cycle_A = self.criterionCycle(self.cycle_masked_fake_A, self.real_A) * lambda_A
         # Backward cycle loss || G_A(G_B(B)) - B||
-        self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
+        self.loss_cycle_B = self.criterionCycle(self.cycle_masked_fake_B, self.real_B) * lambda_B
         # combined loss and calculate gradients
-        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
+        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B
         self.loss_G.backward()
 
     def optimize_parameters(self):
