@@ -128,7 +128,7 @@ class CycleGANModel(BaseModel):
             self.code_A = self.stego_model(self.real_A)
             self.linear_probs_A = torch.log_softmax(self.stego_model.linear_probe(self.code_A), dim=1)
             self.single_img_A = self.real_A[0]
-            self.linear_pred_A = dense_crf(self.single_A, self.linear_probs_A[0]).argmax(0)
+            self.linear_pred_A = dense_crf(self.single_img_A, self.linear_probs_A[0]).argmax(0)
             self.mask_A = (self.linear_pred_A == 7)*1
             #ho la maschera, la converto in pytorch e genero quindi l'attenzione
             self.att_A = torch.tensor(self.mask_A).cuda()
