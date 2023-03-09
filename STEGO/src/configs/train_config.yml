@@ -1,5 +1,5 @@
 output_root: '../'
-pytorch_data_dir: '/datadrive/pytorch-data/'
+pytorch_data_dir: '/content/drive/MyDrive/tesi magistrale/datasets'
 experiment_name: "exp1"
 log_dir: "horse2zebraLog"
 azureml_logging: False
