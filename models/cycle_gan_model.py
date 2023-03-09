@@ -162,6 +162,7 @@ class CycleGANModel(BaseModel):
         # cycle G(G(B)) -> B
         #self.cycle_att_A = self.netG_att_A(self.masked_fake_A)
         self.cycle_att_A = self.att_B
+        # G_A(G_B)
         self.cycle_fake_B = self.netG_A(self.masked_fake_A)
         self.cycle_masked_fake_B = self.cycle_fake_B*self.cycle_att_A + self.masked_fake_A*(1-self.cycle_att_A)
 

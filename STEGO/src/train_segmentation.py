@@ -114,10 +114,12 @@ class LitUnsupervisedSegmenter(pl.LightningModule):
         # It is independent of forward
         net_optim, linear_probe_optim, cluster_probe_optim = self.optimizers()
 
+        # Azzero gradienti
         net_optim.zero_grad()
         linear_probe_optim.zero_grad()
         cluster_probe_optim.zero_grad()
 
+        # carico batch immagine
         with torch.no_grad():
             ind = batch["ind"]
             img = batch["img"]
@@ -127,6 +129,7 @@ class LitUnsupervisedSegmenter(pl.LightningModule):
             label = batch["label"]
             label_pos = batch["label_pos"]
 
+        # Inference
         feats, code = self.net(img)
         if self.cfg.correspondence_weight > 0:
             feats_pos, code_pos = self.net(img_pos)
@@ -139,6 +142,7 @@ class LitUnsupervisedSegmenter(pl.LightningModule):
             signal = feats
             signal_pos = feats_pos
 
+        # calcolo loss
         loss = 0
 
         should_log_hist = (self.cfg.hist_freq is not None) and \
@@ -224,6 +228,7 @@ class LitUnsupervisedSegmenter(pl.LightningModule):
         self.log('loss/cluster', cluster_loss, **log_args)
         self.log('loss/total', loss, **log_args)
 
+        # backpropagation
         self.manual_backward(loss)
         net_optim.step()
         cluster_probe_optim.step()
@@ -473,12 +478,13 @@ def my_app(cfg: DictConfig) -> None:
             gpu_args.pop("val_check_interval")
 
     else:
-        gpu_args = dict(gpus=-1, accelerator='ddp', val_check_interval=cfg.val_freq)
+        gpu_args = dict(gpus=-1, accelerator='cuda', val_check_interval=cfg.val_freq)
         # gpu_args = dict(gpus=1, accelerator='ddp', val_check_interval=cfg.val_freq)
 
         if gpu_args["val_check_interval"] > len(train_loader) // 4:
             gpu_args.pop("val_check_interval")
 
+    checkpoints_number = len(train_loader)//cfg.batch_size * cfg.max_epochs
     trainer = Trainer(
         log_every_n_steps=cfg.scalar_log_freq,
         logger=tb_logger,
@@ -486,8 +492,8 @@ def my_app(cfg: DictConfig) -> None:
         callbacks=[
             ModelCheckpoint(
                 dirpath=join(checkpoint_dir, name),
-                every_n_train_steps=400,
-                save_top_k=2,
+                every_n_train_steps=checkpoints_number,
+                save_top_k=-1,
                 monitor="test/cluster/mIoU",
                 mode="max",
             )
