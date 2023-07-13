@@ -1,6 +1,6 @@
-from .utils import *
-from ..src.modules import *
-from .data import *
+from utils import *
+from modules import *
+from data import *
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from datetime import datetime
@@ -104,6 +104,7 @@ class LitUnsupervisedSegmenter(pl.LightningModule):
 
         self.val_steps = 0
         self.save_hyperparameters()
+
 
     def forward(self, x):
         # in lightning, forward defines the prediction/inference actions
@@ -466,6 +467,16 @@ def my_app(cfg: DictConfig) -> None:
 
     model = LitUnsupervisedSegmenter(train_dataset.n_classes, cfg)
 
+   
+    model.load_from_checkpoint(join(cfg.pytorch_data_dir, cfg.pretrained_checkpoints))
+
+    print(model)
+    print("Num classes: ", model.n_classes)
+    print("\nGradients:")
+    for name, p in model.named_parameters():
+        if p.requires_grad:
+            print(name)
+
     tb_logger = TensorBoardLogger(
         join(log_dir, name),
         default_hp_metric=False
@@ -484,11 +495,13 @@ def my_app(cfg: DictConfig) -> None:
         if gpu_args["val_check_interval"] > len(train_loader) // 4:
             gpu_args.pop("val_check_interval")
 
-    checkpoints_number = len(train_loader)//cfg.batch_size * cfg.max_epochs
+  
+    checkpoints_number = len(train_loader)//cfg.batch_size
+    max_steps = checkpoints_number * cfg.max_epochs
     trainer = Trainer(
         log_every_n_steps=cfg.scalar_log_freq,
         logger=tb_logger,
-        max_steps=cfg.max_steps,
+        max_steps=max_steps,
         callbacks=[
             ModelCheckpoint(
                 dirpath=join(checkpoint_dir, name),
@@ -500,6 +513,7 @@ def my_app(cfg: DictConfig) -> None:
         ],
         **gpu_args
     )
+    
     trainer.fit(model, train_loader, val_loader)
 
 

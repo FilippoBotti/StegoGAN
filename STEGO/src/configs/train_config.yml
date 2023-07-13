@@ -1,9 +1,10 @@
 output_root: '../'
-pytorch_data_dir: '/content/drive/MyDrive/tesi magistrale/datasets'
+pytorch_data_dir: '../../datasets'
 experiment_name: "exp1"
 log_dir: "horse2zebraLog"
 azureml_logging: False
 submitting_to_aml: False
+pretrained_checkpoints: stego_checkpoints.ckpt
 
 # Loader params
 num_workers: 0
