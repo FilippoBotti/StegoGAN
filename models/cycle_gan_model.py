@@ -115,6 +115,8 @@ class CycleGANModel(BaseModel):
         AtoB = self.opt.direction == 'AtoB'
         self.real_A = input['A' if AtoB else 'B'].to(self.device)
         self.real_B = input['B' if AtoB else 'A'].to(self.device)
+        self.mask_A = input['A_mask' if AtoB else 'B_mask'].to(self.device)
+        self.mask_B = input['B_mask' if AtoB else 'A_mask'].to(self.device)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
     def forward(self):
@@ -124,15 +126,16 @@ class CycleGANModel(BaseModel):
         self.fake_B = self.netG_A(self.real_A)
         
         #utilizzo stego per il background subtraction (img_fake*mask + (1-mask)*img_real) ---- (1-mask)=background
-        with torch.no_grad():
-            self.code_A = self.stego_model(self.real_A)
-            self.linear_probs_A = torch.log_softmax(self.stego_model.linear_probe(self.code_A), dim=1)
-            self.single_img_A = self.real_A[0]
-            self.linear_pred_A = dense_crf(self.single_img_A, self.linear_probs_A[0]).argmax(0)
-            self.mask_A = (self.linear_pred_A == 7)*1
-            #ho la maschera, la converto in pytorch e genero quindi l'attenzione
-            self.att_A = torch.tensor(self.mask_A).cuda()
+        # with torch.no_grad():
+        #     self.code_A = self.stego_model(self.real_A)
+        #     self.linear_probs_A = torch.log_softmax(self.stego_model.linear_probe(self.code_A), dim=1)
+        #     self.single_img_A = self.real_A[0]
+        #     self.linear_pred_A = dense_crf(self.single_img_A, self.linear_probs_A[0]).argmax(0)
+        #     self.mask_A = (self.linear_pred_A == 7)*1
+        #     #ho la maschera, la converto in pytorch e genero quindi l'attenzione
+        #     self.att_A = torch.tensor(self.mask_A).cuda()
         #calcolo quindi l'immagine fake con il background subtraction
+        self.att_A = self.mask_A
         self.masked_fake_B = self.fake_B*self.att_A + self.real_A*(1-self.att_A)
         #dato che l'attenzione (la maschera) è una rete pre addestrata, è necessario calcolarla solo
         #una volta, nel ciclo di ricostruzione dell'immagine iniziale sarà infatti la stessa maschera
@@ -148,15 +151,15 @@ class CycleGANModel(BaseModel):
         # G(B) -> A
         self.fake_A = self.netG_B(self.real_B)
 
-        with torch.no_grad():
-            self.code_B = self.stego_model(self.real_B)
-            self.linear_probs_B = torch.log_softmax(self.stego_model.linear_probe(self.code_B), dim=1)
-            self.single_img_B = self.real_B[0]
-            self.linear_pred_B = dense_crf(self.single_img_B, self.linear_probs_B[0]).argmax(0)
-            self.mask_B = (self.linear_pred_B == 7)*1
-            #ho la maschera, la converto in pytorch e genero quindi l'attenzione
-            self.att_B = torch.tensor(self.mask_B).cuda()
-
+        # with torch.no_grad():
+        #     self.code_B = self.stego_model(self.real_B)
+        #     self.linear_probs_B = torch.log_softmax(self.stego_model.linear_probe(self.code_B), dim=1)
+        #     self.single_img_B = self.real_B[0]
+        #     self.linear_pred_B = dense_crf(self.single_img_B, self.linear_probs_B[0]).argmax(0)
+        #     self.mask_B = (self.linear_pred_B == 7)*1
+        #     #ho la maschera, la converto in pytorch e genero quindi l'attenzione
+        #     self.att_B = torch.tensor(self.mask_B).cuda()
+        self.att_B = self.mask_B
         self.masked_fake_A = self.fake_A*self.att_B + self.real_B*(1-self.att_B)
 
         # cycle G(G(B)) -> B
